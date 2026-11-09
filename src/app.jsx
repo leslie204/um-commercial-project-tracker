@@ -164,7 +164,7 @@ function buildModel(data, pid) {
   });
   const items = data.items.filter(inScope).sort((a, b) => {
     const pa = phaseById[a.phaseId], pb = phaseById[b.phaseId];
-    return ((projectById[a.projectId]?.order ?? 0) - (projectById[b.projectId]?.order ?? 0)) || ((pa?.order ?? 99) - (pb?.order ?? 99)) || byCode(a, b);
+    return ((projectById[a.projectId]?.order ?? 0) - (projectById[b.projectId]?.order ?? 0)) || ((pa?.order ?? 99) - (pb?.order ?? 99)) || String(a.start || '9').localeCompare(String(b.start || '9')) || String(a.end || '9').localeCompare(String(b.end || '9')) || byCode(a, b);
   });
   const people = [...data.people].sort((a, b) => a.name.localeCompare(b.name));
   const nameOf = id => people.find(p => p.id === id)?.name || '';
@@ -561,16 +561,16 @@ function ItemRow({ it }) {
 const PRI = { High: 0, Medium: 1, Low: 2, 'Not set': 3 };
 function Items({ filters, setFilters }) {
   const { model, api, dl } = useCtx();
-  const [sort, setSort] = useState('code');
+  const [sort, setSort] = useState('start');
   const list = applyFilters(model.items, filters, model.meta);
-  const sorted = [...list].sort(sort === 'due' ? (a, b) => String(a.end || '9').localeCompare(String(b.end || '9')) : sort === 'priority' ? (a, b) => PRI[a.priority || 'Not set'] - PRI[b.priority || 'Not set'] : () => 0);
+  const sorted = [...list].sort(sort === 'due' ? (a, b) => String(a.end || '9').localeCompare(String(b.end || '9')) : sort === 'num' ? byCode : sort === 'priority' ? (a, b) => PRI[a.priority || 'Not set'] - PRI[b.priority || 'Not set'] : () => 0);
   return (
     <>
       <ViewHead title="Work items"><button className="btn" onClick={() => exportCsv(model, list, dl, api)}>Export CSV</button></ViewHead>
       {!model.phases.length ? <NoPhases /> : <>
         <div className="filters">
           <FilterBar filters={filters} setFilters={setFilters} />
-          <select id="sort" className="in" aria-label="Sort" value={sort} onChange={e => setSort(e.target.value)}><option value="code">Sort by number</option><option value="due">Sort by due date</option><option value="priority">Sort by priority</option></select>
+          <select id="sort" className="in" aria-label="Sort" value={sort} onChange={e => setSort(e.target.value)}><option value="start">Sort by start date</option><option value="due">Sort by due date</option><option value="priority">Sort by priority</option><option value="num">Sort by number</option></select>
         </div>
         {model.phases.map((p, n) => {
           const rows = sorted.filter(i => i.phaseId === p.id);

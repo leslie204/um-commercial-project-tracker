@@ -7,7 +7,7 @@ const VIEWS = [
   ['decisions', 'Decisions'], ['risks', 'Risks'], ['kpis', 'KPIs'],
   ['team', 'Team'], ['activity', 'Activity'], ['setup', 'Project setup'],
 ];
-const COLS = ['projects', 'phases', 'items', 'decisions', 'risks', 'kpis', 'docs', 'people', 'comments', 'activity'];
+const COLS = ['projects', 'phases', 'items', 'decisions', 'risks', 'kpis', 'docs', 'people', 'comments', 'activity', 'scorecards'];
 const EMPTY = Object.fromEntries(COLS.map(c => [c, []]));
 const LOGO = '__LOGO__';
 const ICONS = {
@@ -133,6 +133,7 @@ function useStore() {
         prune();
       },
       say,
+      me: () => refs.current.meId || null,
     };
   }, []);
   refs.current.meId = me.id;
@@ -176,6 +177,7 @@ function buildModel(data, pid) {
     decisions: allDecisions.filter(inScope),
     risks: [...data.risks].filter(inScope).sort(byOrder),
     kpis: [...data.kpis].filter(inScope).sort(byOrder),
+    scorecards: [...data.scorecards].filter(inScope).sort((a, b) => b.week.localeCompare(a.week)),
     docs: [...data.docs].filter(inScope).sort(byOrder),
     activity: data.activity.filter(a => pid === 'all' || a.projectId === pid),
     comments: data.comments,
@@ -884,78 +886,164 @@ const KPI_SECTIONS = ['Ops', 'Hiring', 'Customer Success', 'Finance', 'Major Acc
 const ACCOUNTS = 'Major Accounts';
 const RAG = [['R', 'Red'], ['Y', 'Yellow'], ['G', 'Green']];
 const weekOf = s => { const n = dn(s); return ds(n - ((n + 3) % 7)); };
+const DUE_TIME = '4:00 pm Eastern';
+const DUE_MINUTES = 16 * 60;
+const easternNow = () => {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, mins: Number(p.hour) * 60 + Number(p.minute) };
+};
+const stamp = iso => iso ? new Intl.DateTimeFormat('en-US', { timeZone: 'America/Toronto', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(new Date(iso)).replace(/\s?PM$/, ' pm').replace(/\s?AM$/, ' am') : '';
+const ragName = v => (RAG.find(x => x[0] === v) || [0, 'Not updated'])[1];
+const putWeek = (m, week, v) => { const n = { ...(m || {}) }; if (v) n[week] = v; else delete n[week]; return n; };
 
 function ScoreRow({ row }) {
-  const { api, ro, model } = useCtx();
-  const week = useContext(WeekCtx);
+  const { api, ro } = useCtx();
+  const { week, history, fixing, correct } = useContext(WeekCtx);
   const [open, setOpen] = useState(false);
+  const locked = !!row.locked;
+  const canCheck = !ro && (!locked || fixing);
   const rag = row.rag || {};
   const cur = rag[week] || '';
+  const val = (row.vals || {})[week] || '';
   const isAccount = row.section === ACCOUNTS;
   const trail = Array.from({ length: 6 }, (_, i) => ds(dn(week) - 7 * (6 - i)));
+  const touched = () => ({ upd: { ...(row.upd || {}), [week]: { by: api.me(), at: new Date().toISOString() } } });
   const set = v => {
-    const next = { ...rag };
-    if (cur === v) delete next[week]; else next[week] = v;
-    api.patch('kpis', row.id, { rag: next });
-    api.log(row.projectId, null, cur === v ? `cleared ${row.name} for the week of ${fmt(week)}` : `marked ${row.name} ${RAG.find(x => x[0] === v)[1]} for the week of ${fmt(week)}`);
+    const nextV = cur === v ? '' : v;
+    if (locked) return correct(row, 'rag', nextV);
+    api.patch('kpis', row.id, { rag: putWeek(rag, week, nextV), ...touched() });
+    api.log(row.projectId, null, nextV ? `marked ${row.name} ${ragName(v)} for the week of ${fmt(week)}` : `cleared ${row.name} for the week of ${fmt(week)}`);
+  };
+  const setVal = v => {
+    if (locked) return correct(row, 'vals', v);
+    api.patch('kpis', row.id, { vals: putWeek(row.vals, week, v), ...touched() });
+    api.log(row.projectId, null, v ? `set ${row.name} to ${v} for the week of ${fmt(week)}` : `cleared the result for ${row.name} for the week of ${fmt(week)}`);
+  };
+  const setTarget = v => {
+    api.patch('kpis', row.id, { target: v });
+    api.log(row.projectId, null, `changed the target for ${row.name} from ${row.target || 'none'} to ${v || 'none'}`);
+  };
+  const setName = v => {
+    if (!v) return;
+    api.patch('kpis', row.id, { name: v });
+    api.log(row.projectId, null, `renamed ${row.name} to ${v}`);
   };
   const schema = isAccount
     ? [{ k: 'section', l: 'Section', t: 'sel', opts: KPI_SECTIONS }, { k: 'owner', l: 'Owner', t: 'person' }, { k: 'purpose', l: 'Notes', t: 'area', wide: true, ph: 'Contacts, scope or anything to watch' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true }]
     : [{ k: 'section', l: 'Section', t: 'sel', opts: KPI_SECTIONS }, { k: 'baseline', l: 'Baseline', t: 'text', ph: 'Not measured yet' }, { k: 'current', l: 'Current', t: 'text', ph: 'Not measured yet' }, { k: 'owner', l: 'Owner', t: 'person' },
       { k: 'formula', l: 'Formula', t: 'area', wide: true, ph: 'How this is calculated' }, { k: 'purpose', l: 'Purpose', t: 'area', wide: true, ph: 'What decision this number supports' }, { k: 'benchmark', l: 'Residential benchmark', t: 'text', wide: true, ph: 'How Residential tracks this today' }, { k: 'source', l: 'Data source', t: 'text', wide: true, ph: 'Where the numbers come from' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true }];
+  const past = open ? history(row.id) : [];
   return (
     <div className="sc-item">
       <div className="sc-row">
-        <div className="sc-name"><EditText className="bare" multi label={isAccount ? 'Account name' : 'KPI name'} value={row.name} onSave={v => v && api.patch('kpis', row.id, { name: v })} /></div>
-        <div className="sc-target"><span className="sc-lbl">Target</span><EditText className="bare" label={`Target for ${row.name}`} placeholder="Set target" value={row.target} onSave={v => api.patch('kpis', row.id, { target: v })} /></div>
+        <div className="sc-name">{locked ? <span className="sc-fixed">{row.name}</span> : <EditText className="bare" multi label={isAccount ? 'Account name' : 'KPI name'} value={row.name} onSave={setName} />}</div>
+        <div className="sc-target"><span className="sc-lbl">Target</span>{locked ? <span className={'sc-fixed' + (row.target ? '' : ' sc-empty')}>{row.target || 'None set'}</span> : <EditText className="bare" label={`Target for ${row.name}`} placeholder="Set target" value={row.target} onSave={setTarget} />}</div>
+        <div className="sc-val"><span className="sc-lbl">{isAccount ? 'Note' : 'Result'}</span>{canCheck ? <EditText className="bare" label={`${isAccount ? 'Note' : 'Result'} for ${row.name}, week of ${fmt(week)}`} placeholder={isAccount ? 'Add note' : 'Enter result'} value={val} onSave={setVal} /> : <span className={'sc-fixed' + (val ? '' : ' sc-empty')}>{val || 'Not entered'}</span>}</div>
         <div className="rag" role="group" aria-label={`Status for ${row.name}, week of ${fmt(week)}`}>
-          {RAG.map(([k, l]) => <button key={k} type="button" data-c={k} disabled={ro} aria-label={l} aria-pressed={cur === k} title={l} onClick={() => set(k)}>{k}</button>)}
+          {RAG.map(([k, l]) => <button key={k} type="button" data-c={k} disabled={!canCheck} aria-label={l} aria-pressed={cur === k} title={l} onClick={() => set(k)}>{k}</button>)}
         </div>
         <div className="trail" aria-label="Previous six weeks">
-          {trail.map(w => <i key={w} data-v={rag[w] || ''} title={`Week of ${fmt(w)}: ${(RAG.find(x => x[0] === rag[w]) || [0, 'not checked'])[1]}`} />)}
+          {trail.map(w => <i key={w} data-v={rag[w] || ''} title={`Week of ${fmt(w)}: ${rag[w] ? ragName(rag[w]) : 'not checked'}`} />)}
         </div>
         <button className="tog" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? 'Close' : 'Details'}</button>
       </div>
       {open && <div className="rec-b">
-        {schema.map(f => <FieldEdit key={f.k} f={f} row={row} col="kpis" />)}
-        <div className="wide"><Confirm label="Delete" ask="Delete this row for everyone?" onYes={() => api.del('kpis', row.id)} /></div>
+        {locked
+          ? [['Formula', row.formula], ['Purpose', isAccount ? '' : row.purpose], ['Notes', isAccount ? row.purpose : '']].filter(x => x[1]).map(([l, t]) => <div className="wide sc-def" key={l}><span className="small quiet">{l}</span><p>{t}</p></div>)
+          : schema.map(f => <FieldEdit key={f.k} f={f} row={row} col="kpis" />)}
+        <div className="wide sc-hist">
+          <h3>Weekly history</h3>
+          {past.length ? <table>
+            <thead><tr><th>Week of</th><th>Target</th><th>{isAccount ? 'Note' : 'Result'}</th><th>Status</th><th>Last updated</th></tr></thead>
+            <tbody>{past.map(h => <tr key={h.week}><td>{fmt(h.week)}</td><td>{h.target || '–'}</td><td>{h.val || '–'}</td><td><i data-v={h.rag} />{ragName(h.rag)}</td><td>{h.upd ? `${h.upd.by || 'Unnamed'}, ${stamp(h.upd.at)}` : '–'}</td></tr>)}</tbody>
+          </table> : <p className="small quiet">Saved weeks appear here after the first Friday lock.</p>}
+        </div>
+        {!locked && <div className="wide"><Confirm label="Delete" ask="Delete this row for everyone?" onYes={() => api.del('kpis', row.id)} /></div>}
       </div>}
     </div>
   );
 }
 
-const WeekCtx = createContext('');
+const WeekCtx = createContext({});
 function Kpis() {
   const { model, api, ro } = useCtx();
-  const thisWeek = weekOf(model.today);
+  const east = easternNow();
+  const thisWeek = weekOf(east.date);
   const [week, setWeek] = useState(thisWeek);
+  const [fixing, setFixing] = useState(false);
   const [v, setV] = useState('');
   const [grp, setGrp] = useState(KPI_SECTIONS[0]);
-  const rows = model.kpis;
+  useEffect(() => { setFixing(false); }, [week]);
+  const saved = model.scorecards;
+  const savedWeeks = [...new Set(saved.map(s => s.week))];
+  const earliest = savedWeeks.length ? savedWeeks[savedWeeks.length - 1] : thisWeek;
+  const snaps = saved.filter(s => s.week === week);
+  const lockedIds = new Set(snaps.map(s => s.projectId));
+  const live = model.kpis.filter(k => !lockedIds.has(k.projectId));
+  const rows = [...live, ...snaps.flatMap(s => s.rows.map(r => ({ ...r, projectId: s.projectId, locked: true, snapId: s.id })))].sort(byOrder);
   const n = k => rows.filter(r => (r.rag || {})[week] === k).length;
+  const done = n('R') + n('Y') + n('G');
+  const locked = snaps.length > 0;
+  const friday = ds(dn(week) + 4);
+  const passed = east.date > friday || (east.date === friday && east.mins >= DUE_MINUTES);
+  const daysLeft = dn(friday) - dn(east.date);
+  const left = passed ? 'Past due' : daysLeft === 0 ? 'Due today' : daysLeft === 1 ? '1 day left' : `${daysLeft} days left`;
+  const corrections = snaps.flatMap(s => s.corrections || []).sort((a, b) => b.at.localeCompare(a.at));
+  const history = id => saved.flatMap(s => {
+    const r = (s.rows || []).find(x => x.id === id);
+    return r ? [{ week: s.week, target: r.target, val: (r.vals || {})[s.week] || '', rag: (r.rag || {})[s.week] || '', upd: (r.upd || {})[s.week] }] : [];
+  });
+  const correct = (row, field, value) => {
+    const s = snaps.find(x => x.id === row.snapId);
+    if (!s) return;
+    const before = (row[field] || {})[week] || '';
+    if (before === value) return;
+    const show = x => field === 'rag' ? ragName(x) : (x || 'blank');
+    const who = api.me(), at = new Date().toISOString();
+    api.patch('scorecards', s.id, {
+      rows: s.rows.map(r => r.id === row.id ? { ...r, [field]: putWeek(r[field], week, value), upd: { ...(r.upd || {}), [week]: { by: who, at } } } : r),
+      corrections: [...(s.corrections || []), { at, by: who, name: row.name, what: field === 'rag' ? 'Status' : 'Result', from: show(before), to: show(value) }],
+    });
+    const current = model.kpis.find(k => k.id === row.id);
+    if (current) api.patch('kpis', current.id, { [field]: putWeek(current[field], week, value) });
+    api.log(row.projectId, null, `corrected ${row.name} for the week of ${fmt(week)}: ${show(before)} to ${show(value)}`);
+  };
   const add = e => {
     e.preventDefault(); const t = v.trim(); if (!t || !model.project) return;
-    api.add('kpis', { projectId: model.project.id, name: t, section: grp, itemIds: [], order: Math.max(0, ...rows.map(r => r.order || 0)) + 1, target: '', baseline: '', current: '', owner: '', formula: '', purpose: '', source: '', benchmark: '', rag: {} });
+    api.add('kpis', { projectId: model.project.id, name: t, section: grp, itemIds: [], order: Math.max(0, ...model.kpis.map(r => r.order || 0)) + 1, target: '', baseline: '', current: '', owner: '', formula: '', purpose: '', source: '', benchmark: '', rag: {}, vals: {}, upd: {} });
     api.log(model.project.id, null, `added to the scorecard: ${t}`);
     setV('');
   };
+  const state = locked ? 'locked' : passed ? 'late' : 'open';
   return (
-    <WeekCtx.Provider value={week}>
+    <WeekCtx.Provider value={{ week, history, fixing, correct }}>
       <ViewHead title="KPI Scorecard" />
       <section className="sc-bar">
         <div className="sc-week">
-          <button className="btn icon" aria-label="Previous week" onClick={() => setWeek(ds(dn(week) - 7))}>‹</button>
-          <div><span className="quiet small">Weekly check-in</span><b>Week of {fmt(week)}</b></div>
+          <button className="btn icon" aria-label="Previous week" disabled={week <= earliest} title={week <= earliest ? 'No earlier saved weeks' : undefined} onClick={() => setWeek(ds(dn(week) - 7))}>‹</button>
+          <div><span className="quiet small">{locked ? 'Saved report' : 'Weekly check-in'}</span><b>Week of {fmt(week)}</b></div>
           <button className="btn icon" aria-label="Next week" disabled={week >= thisWeek} onClick={() => setWeek(ds(dn(week) + 7))}>›</button>
           {week !== thisWeek && <button className="btn" onClick={() => setWeek(thisWeek)}>This week</button>}
+          {savedWeeks.length > 0 && <select className="in sc-jump" aria-label="Open a saved report" value={savedWeeks.includes(week) ? week : ''} onChange={e => e.target.value && setWeek(e.target.value)}>
+            <option value="">Saved reports</option>
+            {savedWeeks.map(w => <option key={w} value={w}>Week of {fmt(w)}</option>)}
+          </select>}
         </div>
         <div className="sc-counts">
           {RAG.slice().reverse().map(([k, l]) => <span key={k}><i data-v={k} /><b className="num">{n(k)}</b> {l}</span>)}
-          <span><i data-v="" /><b className="num">{rows.length - n('R') - n('Y') - n('G')}</b> Not checked</span>
+          <span><i data-v="" /><b className="num">{rows.length - done}</b> Not updated</span>
         </div>
       </section>
-      <p className="small quiet">Green is at target or better. Yellow is within 5% of target. Red is more than 5% off target.</p>
-      {model.project && !ro && <form className="addbar" onSubmit={add}><input id="add-kpi" className="in" placeholder="Add a KPI or account" aria-label="Add a KPI or account" value={v} onChange={e => setV(e.target.value)} /><select id="add-kpi-group" className="in group-sel" aria-label="Section" value={grp} onChange={e => setGrp(e.target.value)}>{KPI_SECTIONS.map(g => <option key={g}>{g}</option>)}</select><button className="btn primary">Add</button></form>}
+      <div className="sc-due" data-s={state}>
+        {locked
+          ? <div><b>Locked {stamp(snaps[0].savedAt)}.</b><span className="sub">This is the report as it stood at the deadline, including names and targets at the time. {fixing ? 'You are correcting results and statuses. Each change is recorded below.' : ''}</span></div>
+          : passed
+            ? <div><b>The Friday {DUE_TIME} deadline has passed.</b><span className="sub">{done} of {rows.length} updated. This week's report is being saved and locked.</span></div>
+            : <div><b>All KPIs must be updated by Friday at {DUE_TIME}.</b><span className="sub">This week's deadline is Friday, {fmt(friday)}. {left}. {done} of {rows.length} updated. The report is saved and locked at the deadline.</span></div>}
+        {locked && !ro && <button className="btn" onClick={() => setFixing(f => !f)}>{fixing ? 'Done correcting' : 'Correct this report'}</button>}
+      </div>
+      <p className="small quiet">A KPI counts as updated once its status is set. Green is at target or better. Yellow is within 5% of target. Red is more than 5% off target.{!savedWeeks.length && ` The first saved report will be Friday, ${fmt(friday)}. After that, use the arrows or Saved reports to open any past week.`}</p>
+      {model.project && !ro && !locked && <form className="addbar" onSubmit={add}><input id="add-kpi" className="in" placeholder="Add a KPI or account" aria-label="Add a KPI or account" value={v} onChange={e => setV(e.target.value)} /><select id="add-kpi-group" className="in group-sel" aria-label="Section" value={grp} onChange={e => setGrp(e.target.value)}>{KPI_SECTIONS.map(g => <option key={g}>{g}</option>)}</select><button className="btn primary">Add</button></form>}
       {!rows.length && <div className="empty"><p>No KPIs yet. Add the numbers and accounts this project needs to check each week.</p></div>}
       {KPI_SECTIONS.map(g => {
         const rs = rows.filter(r => (r.section || KPI_SECTIONS[0]) === g);
@@ -964,12 +1052,15 @@ function Kpis() {
           <section className="group sc-group" key={g}>
             <div className="ghead"><h2>{g}</h2><span className="small quiet num">{rs.length}</span></div>
             <div className="sc-table">
-              <div className="sc-row sc-head"><span>{g === ACCOUNTS ? 'Account' : 'KPI'}</span><span>Target</span><span>Week of {fmt(week)}</span><span>Last 6 weeks</span><span /></div>
+              <div className="sc-row sc-head"><span>{g === ACCOUNTS ? 'Account' : 'KPI'}</span><span>Target</span><span>{g === ACCOUNTS ? 'Note' : 'Result'}</span><span>Status</span><span>Last 6 weeks</span><span /></div>
               {rs.map(r => <ScoreRow key={r.id} row={r} />)}
             </div>
           </section>
         );
       })}
+      {corrections.length > 0 && <section className="sc-cor"><h2>Corrections to this report</h2><ul>
+        {corrections.map((c, i) => <li key={i}><b>{c.name}</b>: {c.what} changed from {c.from} to {c.to}. {c.by || 'Unnamed'}, {stamp(c.at)}</li>)}
+      </ul></section>}
     </WeekCtx.Provider>
   );
 }
@@ -1035,7 +1126,7 @@ function Setup({ onDeleted }) {
   if (!p) return <><ViewHead title="Project setup" /><div className="empty"><p>Pick a project in the list to change its setup.</p></div></>;
   const swap = (a, b) => { api.patch('phases', a.id, { order: b.order }); api.patch('phases', b.id, { order: a.order }); };
   const wipe = async () => {
-    for (const [col, rows] of [['items', model.items], ['decisions', model.decisions], ['risks', model.risks], ['kpis', model.kpis], ['docs', model.docs], ['phases', model.phases]]) for (const r of rows) await api.del(col, r.id);
+    for (const [col, rows] of [['items', model.items], ['decisions', model.decisions], ['risks', model.risks], ['kpis', model.kpis], ['scorecards', model.scorecards], ['docs', model.docs], ['phases', model.phases]]) for (const r of rows) await api.del(col, r.id);
     await api.del('projects', p.id);
     onDeleted();
   };

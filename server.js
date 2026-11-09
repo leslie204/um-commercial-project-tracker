@@ -7,12 +7,15 @@ const zlib = require('zlib');
 const { Pool } = require('pg');
 
 const PORT = Number(process.env.PORT) || 3000;
-const COLLECTIONS = new Set(['projects', 'phases', 'items', 'decisions', 'risks', 'kpis', 'docs', 'people', 'comments', 'activity']);
+const COLLECTIONS = new Set(['projects', 'phases', 'items', 'decisions', 'risks', 'kpis', 'docs', 'people', 'comments', 'activity', 'scorecards']);
 const ID_PATTERN = /^[A-Za-z0-9_.~:@+-]{1,200}$/;
 const MAX_BODY = 300 * 1024;
 const MAX_WRITES_PER_MINUTE = 300;
 const ACTIVITY_KEEP = 1000;
 const ACTIVITY_SENT = 300;
+const FIRST_SCORECARD_WEEK = '2026-11-09';
+const SCORECARD_DUE_MINUTES = 16 * 60; // Friday 4:00 pm Eastern
+const SCORECARD_LOCK = 'Friday 4:00 pm lock';
 
 const pool = new Pool({ connectionString: process.env.DATABASE_URL, max: 8 });
 pool.on('error', e => console.error('database connection error', e.message));
@@ -124,6 +127,58 @@ async function allData() {
   return out;
 }
 
+const dayNum = s => Math.round(Date.parse(s + 'T00:00:00Z') / 864e5);
+const dayStr = n => new Date(n * 864e5).toISOString().slice(0, 10);
+
+function easternNow() {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Toronto', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date()).map(x => [x.type, x.value]));
+  return { date: `${p.year}-${p.month}-${p.day}`, mins: Number(p.hour) * 60 + Number(p.minute) };
+}
+
+function lastDueWeek(now) {
+  const n = dayNum(now.date);
+  const monday = n - ((n + 3) % 7);
+  const friday = monday + 4;
+  const passed = n > friday || (n === friday && now.mins >= SCORECARD_DUE_MINUTES);
+  return dayStr(passed ? monday : monday - 7);
+}
+
+// Saves one permanent copy of each project's scorecard after the Friday deadline. An existing copy is never replaced.
+let savingScorecards = false;
+async function saveScorecards() {
+  if (!ready || savingScorecards) return;
+  savingScorecards = true;
+  try {
+    const week = lastDueWeek(easternNow());
+    if (week < FIRST_SCORECARD_WEEK) return;
+    const recent = new Set(Array.from({ length: 7 }, (_, i) => dayStr(dayNum(week) - 7 * i)));
+    const keep = m => Object.fromEntries(Object.entries(m || {}).filter(([w]) => recent.has(w)));
+    const kpis = await pool.query("SELECT id, data FROM docs WHERE col = 'kpis'");
+    const byProject = new Map();
+    for (const r of kpis.rows) {
+      if (!r.data.projectId) continue;
+      if (!byProject.has(r.data.projectId)) byProject.set(r.data.projectId, []);
+      byProject.get(r.data.projectId).push({ ...r.data, id: r.id, rag: keep(r.data.rag), vals: keep(r.data.vals), upd: keep(r.data.upd) });
+    }
+    for (const [projectId, rows] of byProject) {
+      const id = `${projectId}_${week}`;
+      const at = new Date().toISOString();
+      const data = { projectId, week, savedAt: at, savedBy: SCORECARD_LOCK, rows, corrections: [] };
+      const saved = await pool.query("INSERT INTO docs (col, id, data) VALUES ('scorecards', $1, $2) ON CONFLICT DO NOTHING RETURNING data", [id, data]);
+      if (!saved.rowCount) continue;
+      broadcast({ col: 'scorecards', id, data: saved.rows[0].data });
+      const entry = { at, by: SCORECARD_LOCK, projectId, itemId: null, text: `saved and locked the scorecard for the week of ${week}` };
+      await pool.query("INSERT INTO docs (col, id, data) VALUES ('activity', $1, $2) ON CONFLICT DO NOTHING", [`lock-${id}`, entry]);
+      broadcast({ col: 'activity', id: `lock-${id}`, data: entry });
+      console.log(`locked scorecard ${id}`);
+    }
+  } catch (e) {
+    console.error('scorecard save failed', e.message);
+  } finally {
+    savingScorecards = false;
+  }
+}
+
 const isPlainObject = v => v && typeof v === 'object' && !Array.isArray(v);
 
 async function write(req, res) {
@@ -182,5 +237,6 @@ const server = http.createServer(async (req, res) => {
 });
 
 setInterval(() => { for (const s of streams) s.write(': ping\n\n'); }, 25000).unref();
-server.listen(PORT, () => { console.log(`listening on ${PORT}`); startDatabase(); });
+setInterval(saveScorecards, 30000).unref();
+server.listen(PORT, () => { console.log(`listening on ${PORT}`); startDatabase().then(saveScorecards); });
 process.on('SIGTERM', () => { for (const s of streams) s.end(); server.close(() => pool.end().then(() => process.exit(0))); setTimeout(() => process.exit(0), 3000).unref(); });

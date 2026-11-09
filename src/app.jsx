@@ -881,15 +881,98 @@ function Risks() {
   return <Records title="Risks" col="risks" rows={model.risks} schema={schema} titleKey="title" chips={chips} closed={r => r.status === 'Closed'} addPh="Add something that could go wrong" defaults={{ status: 'Open', likelihood: 'Not set', impact: 'Not set', owner: '', mitigation: '' }} before={heat} emptyText="No risks logged yet." />;
 }
 
-const KPI_SECTIONS = ['Ops', 'Hiring', 'Customer Success', 'Finance'];
+const KPI_SECTIONS = ['Ops', 'Hiring', 'Customer Success', 'Finance', 'Major Accounts'];
+const ACCOUNTS = 'Major Accounts';
+const RAG = [['R', 'Red'], ['Y', 'Yellow'], ['G', 'Green']];
+const weekOf = s => { const n = dn(s); return ds(n - ((n + 3) % 7)); };
+
+function ScoreRow({ row }) {
+  const { api, ro, model } = useCtx();
+  const week = useContext(WeekCtx);
+  const [open, setOpen] = useState(false);
+  const rag = row.rag || {};
+  const cur = rag[week] || '';
+  const isAccount = row.section === ACCOUNTS;
+  const trail = Array.from({ length: 6 }, (_, i) => ds(dn(week) - 7 * (6 - i)));
+  const set = v => {
+    const next = { ...rag };
+    if (cur === v) delete next[week]; else next[week] = v;
+    api.patch('kpis', row.id, { rag: next });
+    api.log(row.projectId, null, cur === v ? `cleared ${row.name} for the week of ${fmt(week)}` : `marked ${row.name} ${RAG.find(x => x[0] === v)[1]} for the week of ${fmt(week)}`);
+  };
+  const schema = isAccount
+    ? [{ k: 'section', l: 'Section', t: 'sel', opts: KPI_SECTIONS }, { k: 'owner', l: 'Owner', t: 'person' }, { k: 'purpose', l: 'Notes', t: 'area', wide: true, ph: 'Contacts, scope or anything to watch' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true }]
+    : [{ k: 'section', l: 'Section', t: 'sel', opts: KPI_SECTIONS }, { k: 'baseline', l: 'Baseline', t: 'text', ph: 'Not measured yet' }, { k: 'current', l: 'Current', t: 'text', ph: 'Not measured yet' }, { k: 'owner', l: 'Owner', t: 'person' },
+      { k: 'formula', l: 'Formula', t: 'area', wide: true, ph: 'How this is calculated' }, { k: 'purpose', l: 'Purpose', t: 'area', wide: true, ph: 'What decision this number supports' }, { k: 'benchmark', l: 'Residential benchmark', t: 'text', wide: true, ph: 'How Residential tracks this today' }, { k: 'source', l: 'Data source', t: 'text', wide: true, ph: 'Where the numbers come from' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true }];
+  return (
+    <div className="sc-item">
+      <div className="sc-row">
+        <div className="sc-name"><EditText className="bare" multi label={isAccount ? 'Account name' : 'KPI name'} value={row.name} onSave={v => v && api.patch('kpis', row.id, { name: v })} /></div>
+        <div className="sc-target"><span className="sc-lbl">Target</span><EditText className="bare" label={`Target for ${row.name}`} placeholder="Set target" value={row.target} onSave={v => api.patch('kpis', row.id, { target: v })} /></div>
+        <div className="rag" role="group" aria-label={`Status for ${row.name}, week of ${fmt(week)}`}>
+          {RAG.map(([k, l]) => <button key={k} type="button" data-c={k} disabled={ro} aria-label={l} aria-pressed={cur === k} title={l} onClick={() => set(k)}>{k}</button>)}
+        </div>
+        <div className="trail" aria-label="Previous six weeks">
+          {trail.map(w => <i key={w} data-v={rag[w] || ''} title={`Week of ${fmt(w)}: ${(RAG.find(x => x[0] === rag[w]) || [0, 'not checked'])[1]}`} />)}
+        </div>
+        <button className="tog" aria-expanded={open} onClick={() => setOpen(o => !o)}>{open ? 'Close' : 'Details'}</button>
+      </div>
+      {open && <div className="rec-b">
+        {schema.map(f => <FieldEdit key={f.k} f={f} row={row} col="kpis" />)}
+        <div className="wide"><Confirm label="Delete" ask="Delete this row for everyone?" onYes={() => api.del('kpis', row.id)} /></div>
+      </div>}
+    </div>
+  );
+}
+
+const WeekCtx = createContext('');
 function Kpis() {
-  const schema = [
-    { k: 'section', l: 'Section', t: 'sel', opts: KPI_SECTIONS }, { k: 'target', l: 'Target', t: 'text' }, { k: 'baseline', l: 'Baseline', t: 'text', ph: 'Not measured yet' }, { k: 'current', l: 'Current', t: 'text', ph: 'Not measured yet' }, { k: 'owner', l: 'Owner', t: 'person' },
-    { k: 'formula', l: 'Formula', t: 'area', wide: true, ph: 'How this is calculated' }, { k: 'purpose', l: 'Purpose', t: 'area', wide: true, ph: 'What decision this number supports' }, { k: 'benchmark', l: 'Residential benchmark', t: 'text', wide: true, ph: 'How Residential tracks this today' }, { k: 'source', l: 'Data source', t: 'text', wide: true, ph: 'Where the numbers come from' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true },
-  ];
-  const { model } = useCtx();
-  const chips = r => [r.target && [`Target ${r.target}`, 'info'], [`Baseline ${r.baseline || 'not set'}`, 'mute'], r.current && [`Now ${r.current}`, 'mute'], !r.formula && ['Needs formula', 'mute']];
-  return <Records title="KPIs" col="kpis" rows={model.kpis} schema={schema} titleKey="name" chips={chips} addPh="Add a KPI" groups={KPI_SECTIONS} groupKey="section" defaults={{ target: '', baseline: '', current: '', owner: '', formula: '', purpose: '', source: '', benchmark: '' }} emptyText="No KPIs yet. Add the numbers this project needs to move." />;
+  const { model, api, ro } = useCtx();
+  const thisWeek = weekOf(model.today);
+  const [week, setWeek] = useState(thisWeek);
+  const [v, setV] = useState('');
+  const [grp, setGrp] = useState(KPI_SECTIONS[0]);
+  const rows = model.kpis;
+  const n = k => rows.filter(r => (r.rag || {})[week] === k).length;
+  const add = e => {
+    e.preventDefault(); const t = v.trim(); if (!t || !model.project) return;
+    api.add('kpis', { projectId: model.project.id, name: t, section: grp, itemIds: [], order: Math.max(0, ...rows.map(r => r.order || 0)) + 1, target: '', baseline: '', current: '', owner: '', formula: '', purpose: '', source: '', benchmark: '', rag: {} });
+    api.log(model.project.id, null, `added to the scorecard: ${t}`);
+    setV('');
+  };
+  return (
+    <WeekCtx.Provider value={week}>
+      <ViewHead title="KPI Scorecard" />
+      <section className="sc-bar">
+        <div className="sc-week">
+          <button className="btn icon" aria-label="Previous week" onClick={() => setWeek(ds(dn(week) - 7))}>‹</button>
+          <div><span className="quiet small">Weekly check-in</span><b>Week of {fmt(week)}</b></div>
+          <button className="btn icon" aria-label="Next week" disabled={week >= thisWeek} onClick={() => setWeek(ds(dn(week) + 7))}>›</button>
+          {week !== thisWeek && <button className="btn" onClick={() => setWeek(thisWeek)}>This week</button>}
+        </div>
+        <div className="sc-counts">
+          {RAG.slice().reverse().map(([k, l]) => <span key={k}><i data-v={k} /><b className="num">{n(k)}</b> {l}</span>)}
+          <span><i data-v="" /><b className="num">{rows.length - n('R') - n('Y') - n('G')}</b> Not checked</span>
+        </div>
+      </section>
+      <p className="small quiet">Green is at target or better. Yellow is within 5% of target. Red is more than 5% off target.</p>
+      {model.project && !ro && <form className="addbar" onSubmit={add}><input id="add-kpi" className="in" placeholder="Add a KPI or account" aria-label="Add a KPI or account" value={v} onChange={e => setV(e.target.value)} /><select id="add-kpi-group" className="in group-sel" aria-label="Section" value={grp} onChange={e => setGrp(e.target.value)}>{KPI_SECTIONS.map(g => <option key={g}>{g}</option>)}</select><button className="btn primary">Add</button></form>}
+      {!rows.length && <div className="empty"><p>No KPIs yet. Add the numbers and accounts this project needs to check each week.</p></div>}
+      {KPI_SECTIONS.map(g => {
+        const rs = rows.filter(r => (r.section || KPI_SECTIONS[0]) === g);
+        if (!rs.length) return null;
+        return (
+          <section className="group sc-group" key={g}>
+            <div className="ghead"><h2>{g}</h2><span className="small quiet num">{rs.length}</span></div>
+            <div className="sc-table">
+              <div className="sc-row sc-head"><span>{g === ACCOUNTS ? 'Account' : 'KPI'}</span><span>Target</span><span>Week of {fmt(week)}</span><span>Last 6 weeks</span><span /></div>
+              {rs.map(r => <ScoreRow key={r.id} row={r} />)}
+            </div>
+          </section>
+        );
+      })}
+    </WeekCtx.Provider>
+  );
 }
 
 function Documents() {

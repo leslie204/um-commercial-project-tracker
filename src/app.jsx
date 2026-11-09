@@ -4,7 +4,7 @@ const STATUS = ['Not started', 'In progress', 'Blocked', 'Done'];
 const LEVELS = ['High', 'Medium', 'Low', 'Not set'];
 const VIEWS = [
   ['overview', 'Overview'], ['items', 'Work items'], ['board', 'Board'], ['timeline', 'Timeline'],
-  ['decisions', 'Decisions'], ['risks', 'Risks'], ['kpis', 'KPIs'], ['documents', 'SOPs and documents'],
+  ['decisions', 'Decisions'], ['risks', 'Risks'], ['kpis', 'KPIs'],
   ['team', 'Team'], ['activity', 'Activity'], ['setup', 'Project setup'],
 ];
 const COLS = ['projects', 'phases', 'items', 'decisions', 'risks', 'kpis', 'docs', 'people', 'comments', 'activity'];
@@ -18,7 +18,6 @@ const ICONS = {
   decisions: 'M9 12l2 2 4-4M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18z',
   risks: 'M12 3.5 2.5 20h19L12 3.5zM12 10v4M12 17.3h.01',
   kpis: 'M5 20v-9M11 20V5M17 20v-6M3 20h18',
-  documents: 'M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8zM14 3v5h5M9 13h6M9 17h6',
   team: 'M16 20v-1a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v1M9.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM21 20v-1a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8',
   activity: 'M3 12h4l3 8 4-16 3 8h4',
   setup: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4',
@@ -975,22 +974,6 @@ function Kpis() {
   );
 }
 
-function Documents() {
-  const { model } = useCtx();
-  const schema = [
-    { k: 'type', l: 'Type', t: 'sel', opts: ['SOP', 'Agreement', 'Plan', 'Workflow', 'Tracker', 'Other'] },
-    { k: 'status', l: 'Status', t: 'sel', opts: ['To draft', 'In draft', 'In review', 'Approved', 'Live'] },
-    { k: 'owner', l: 'Owner', t: 'person' },
-    { k: 'url', l: 'Link', t: 'url', ph: 'https://' },
-    { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true },
-    { k: 'notes', l: 'Notes', t: 'area', wide: true },
-  ];
-  const chips = (r, m) => [[r.type || 'Other'], [r.status || 'To draft', r.status === 'Live' || r.status === 'Approved' ? 'good' : r.status === 'To draft' ? 'warn' : 'info'], r.owner && [m.nameOf(r.owner)]];
-  const links = model.docs.filter(d => safeUrl(d.url));
-  const before = links.length > 0 && <div className="chips">{links.map(d => <a key={d.id} className="chip" href={d.url} target="_blank" rel="noreferrer">Open {d.name}</a>)}</div>;
-  return <Records title="SOPs and documents" col="docs" rows={model.docs} schema={schema} titleKey="name" chips={chips} addPh="Add an SOP, agreement or tracker" defaults={{ type: 'SOP', status: 'To draft', owner: '', url: '', notes: '' }} before={before} emptyText="No documents yet. List the SOPs and agreements this project has to produce." />;
-}
-
 /* ---------- Team ---------- */
 function Team() {
   const { model, api, ro } = useCtx();
@@ -1107,7 +1090,6 @@ function ItemSheet({ it, close }) {
   const addNote = e => { e.preventDefault(); const t = note.trim(); if (!t) return; api.add('comments', { itemId: it.id, projectId: it.projectId, text: t, by: model.meId || null }); api.log(it.projectId, it.id, `commented on ${it.code} ${it.title}`); setNote(''); };
   const depOpts = model.allItems.filter(o => o.projectId === it.projectId && o.id !== it.id).sort(byCode).map(o => ({ id: o.id, label: `${o.code} ${o.title}`, short: o.code }));
   const decs = model.decisions.filter(d => (d.itemIds || []).includes(it.id));
-  const docs = model.docs.filter(d => (d.itemIds || []).includes(it.id));
   return (
     <>
       <div className="shade" onClick={close} />
@@ -1151,7 +1133,6 @@ function ItemSheet({ it, close }) {
           {m.conflicts.map(c => <p key={c.id} className="small" style={{ color: 'var(--crit)' }}>This starts {fmt(it.start)}, before {c.code} ends {fmt(c.end)}.</p>)}
         </div>
         {decs.length > 0 && <div className="sec"><h3>Linked decisions</h3><ul className="alist">{decs.map(d => <li key={d.id}><span className={`flag tag ${d.status === 'Decided' ? 'good' : 'warn'}`}>{d.status}</span><div>{d.text}{d.resolution && <p className="small quiet">{d.resolution}</p>}</div></li>)}</ul></div>}
-        {docs.length > 0 && <div className="sec"><h3>SOPs and documents</h3><ul className="alist">{docs.map(d => <li key={d.id}><span className="flag mute tag">{d.status}</span><div>{safeUrl(d.url) ? <a href={d.url} target="_blank" rel="noreferrer">{d.name}</a> : d.name}</div></li>)}</ul></div>}
         <div className="sec">
           <h3>Comments</h3>
           {comments.map(c => <div className="cmt" key={c.id}><small>{profiles[c.by]?.name || 'Someone'} · {fmt(String(c.createdAt).slice(0, 10))}</small>{c.text}</div>)}
@@ -1233,7 +1214,7 @@ function App() {
     items: model.items.filter(i => i.status !== 'Done').length,
     decisions: model.decisions.filter(d => d.status !== 'Decided').length,
     risks: model.risks.filter(r => r.status !== 'Closed').length,
-    kpis: model.kpis.length, documents: model.docs.length, team: model.people.length,
+    kpis: model.kpis.length, team: model.people.length,
   };
   const prog = id => { const l = data.items.filter(i => i.projectId === id); return `${l.filter(i => i.status === 'Done').length}/${l.length} done`; };
   let body;
@@ -1246,7 +1227,7 @@ function App() {
     const P = { filters, setFilters };
     body = view === 'overview' ? <Overview setModal={setModal} setFilters={setFilters} go={go} />
       : view === 'items' ? <Items {...P} /> : view === 'board' ? <Board {...P} /> : view === 'timeline' ? <Timeline {...P} />
-        : view === 'decisions' ? <Decisions /> : view === 'risks' ? <Risks /> : view === 'kpis' ? <Kpis /> : view === 'documents' ? <Documents />
+        : view === 'decisions' ? <Decisions /> : view === 'risks' ? <Risks /> : view === 'kpis' ? <Kpis />
           : view === 'team' ? <Team /> : view === 'activity' ? <Activity /> : <Setup onDeleted={() => { setPid('all'); go('overview'); }} />;
   }
   return (

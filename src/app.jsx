@@ -793,25 +793,30 @@ function RecRow({ row, col, schema, titleKey, chips, closed, startOpen, delAsk }
   );
 }
 
-function Records({ title, col, rows, schema, titleKey, chips, closed, addPh, defaults, emptyText, before, sort }) {
+function Records({ title, col, rows, schema, titleKey, chips, closed, addPh, defaults, emptyText, before, sort, groups, groupKey }) {
   const { model, api, ro } = useCtx();
   const [v, setV] = useState('');
   const [fresh, setFresh] = useState(null);
+  const [grp, setGrp] = useState(groups ? groups[0] : '');
   const canAdd = model.project && !ro;
   const add = e => {
     e.preventDefault(); const t = v.trim(); if (!t) return;
-    const id = api.add(col, { projectId: model.project.id, [titleKey]: t, itemIds: [], order: rows.length + 1, ...defaults });
+    const id = api.add(col, { projectId: model.project.id, [titleKey]: t, itemIds: [], order: rows.length + 1, ...defaults, ...(groups ? { [groupKey]: grp } : {}) });
     api.log(model.project.id, null, `added to ${title.toLowerCase()}: ${t}`);
     setFresh(id); setV('');
   };
   const list = sort ? [...rows].sort(sort) : rows;
+  const renderList = rs => <div className="list">{rs.map(r => <RecRow key={r.id} row={r} col={col} schema={schema} titleKey={titleKey} chips={chips} closed={closed} startOpen={r.id === fresh} />)}</div>;
   return (
     <>
       <ViewHead title={title} />
       {before}
-      {canAdd && <form className="addbar" onSubmit={add}><input id={`add-${col}`} className="in" placeholder={addPh} aria-label={addPh} value={v} onChange={e => setV(e.target.value)} /><button className="btn primary">Add</button></form>}
+      {canAdd && <form className="addbar" onSubmit={add}><input id={`add-${col}`} className="in" placeholder={addPh} aria-label={addPh} value={v} onChange={e => setV(e.target.value)} />{groups && <select id={`add-${col}-group`} className="in group-sel" aria-label="Section" value={grp} onChange={e => setGrp(e.target.value)}>{groups.map(g => <option key={g}>{g}</option>)}</select>}<button className="btn primary">Add</button></form>}
       {!model.project && <p className="small quiet">Pick a project in the list to add here.</p>}
-      {list.length ? <div className="list">{list.map(r => <RecRow key={r.id} row={r} col={col} schema={schema} titleKey={titleKey} chips={chips} closed={closed} startOpen={r.id === fresh} />)}</div> : <div className="empty"><p>{emptyText}</p></div>}
+      {!list.length ? <div className="empty"><p>{emptyText}</p></div> : groups ? groups.map(g => {
+        const rs = list.filter(r => (r[groupKey] || groups[0]) === g);
+        return rs.length ? <section className="rgroup" key={g}><h2>{g}<span className="num">{rs.length}</span></h2>{renderList(rs)}</section> : null;
+      }) : renderList(list)}
     </>
   );
 }
@@ -876,14 +881,15 @@ function Risks() {
   return <Records title="Risks" col="risks" rows={model.risks} schema={schema} titleKey="title" chips={chips} closed={r => r.status === 'Closed'} addPh="Add something that could go wrong" defaults={{ status: 'Open', likelihood: 'Not set', impact: 'Not set', owner: '', mitigation: '' }} before={heat} emptyText="No risks logged yet." />;
 }
 
+const KPI_SECTIONS = ['Ops', 'Hiring', 'Customer Success', 'Finance'];
 function Kpis() {
   const schema = [
-    { k: 'target', l: 'Target', t: 'text' }, { k: 'baseline', l: 'Baseline', t: 'text', ph: 'Not measured yet' }, { k: 'current', l: 'Current', t: 'text', ph: 'Not measured yet' }, { k: 'owner', l: 'Owner', t: 'person' },
-    { k: 'formula', l: 'Formula', t: 'area', wide: true, ph: 'How this is calculated' }, { k: 'purpose', l: 'Purpose', t: 'area', wide: true, ph: 'What decision this number supports' }, { k: 'source', l: 'Data source', t: 'text', wide: true, ph: 'Where the numbers come from' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true },
+    { k: 'section', l: 'Section', t: 'sel', opts: KPI_SECTIONS }, { k: 'target', l: 'Target', t: 'text' }, { k: 'baseline', l: 'Baseline', t: 'text', ph: 'Not measured yet' }, { k: 'current', l: 'Current', t: 'text', ph: 'Not measured yet' }, { k: 'owner', l: 'Owner', t: 'person' },
+    { k: 'formula', l: 'Formula', t: 'area', wide: true, ph: 'How this is calculated' }, { k: 'purpose', l: 'Purpose', t: 'area', wide: true, ph: 'What decision this number supports' }, { k: 'benchmark', l: 'Residential benchmark', t: 'text', wide: true, ph: 'How Residential tracks this today' }, { k: 'source', l: 'Data source', t: 'text', wide: true, ph: 'Where the numbers come from' }, { k: 'itemIds', l: 'Linked work items', t: 'items', wide: true },
   ];
   const { model } = useCtx();
-  const chips = r => [r.target && [`Target ${r.target}`, 'info'], [`Baseline ${r.baseline || 'not set'}`, r.baseline ? 'mute' : 'warn'], r.current && [`Now ${r.current}`, 'good'], !r.formula && ['Needs formula', 'warn']];
-  return <Records title="KPIs" col="kpis" rows={model.kpis} schema={schema} titleKey="name" chips={chips} addPh="Add a KPI" defaults={{ target: '', baseline: '', current: '', owner: '', formula: '', purpose: '', source: '' }} emptyText="No KPIs yet. Add the numbers this project needs to move." />;
+  const chips = r => [r.target && [`Target ${r.target}`, 'info'], [`Baseline ${r.baseline || 'not set'}`, 'mute'], r.current && [`Now ${r.current}`, 'mute'], !r.formula && ['Needs formula', 'mute']];
+  return <Records title="KPIs" col="kpis" rows={model.kpis} schema={schema} titleKey="name" chips={chips} addPh="Add a KPI" groups={KPI_SECTIONS} groupKey="section" defaults={{ target: '', baseline: '', current: '', owner: '', formula: '', purpose: '', source: '', benchmark: '' }} emptyText="No KPIs yet. Add the numbers this project needs to move." />;
 }
 
 function Documents() {

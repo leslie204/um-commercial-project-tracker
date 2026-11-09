@@ -935,10 +935,12 @@ function ScoreRow({ row }) {
   const past = open ? history(row.id) : [];
   return (
     <div className="sc-item">
-      <div className="sc-row">
+      <div className={'sc-row' + (isAccount ? ' sc-acct' : '')}>
         <div className="sc-name">{locked ? <span className="sc-fixed">{row.name}</span> : <EditText className="bare" multi label={isAccount ? 'Account name' : 'KPI name'} value={row.name} onSave={setName} />}</div>
-        <div className="sc-target"><span className="sc-lbl">Target</span>{locked ? <span className={'sc-fixed' + (row.target ? '' : ' sc-empty')}>{row.target || 'None set'}</span> : <EditText className="bare" label={`Target for ${row.name}`} placeholder="Set target" value={row.target} onSave={setTarget} />}</div>
-        <div className="sc-val"><span className="sc-lbl">{isAccount ? 'Note' : 'Result'}</span>{canCheck ? <EditText className="bare" label={`${isAccount ? 'Note' : 'Result'} for ${row.name}, week of ${fmt(week)}`} placeholder={isAccount ? 'Add note' : 'Enter result'} value={val} onSave={setVal} /> : <span className={'sc-fixed' + (val ? '' : ' sc-empty')}>{val || 'Not entered'}</span>}</div>
+        {isAccount ? <><span className="sc-gap" /><span className="sc-gap" /></> : <>
+          <div className="sc-target"><span className="sc-lbl">Target</span>{locked ? <span className={'sc-fixed' + (row.target ? '' : ' sc-empty')}>{row.target || 'None set'}</span> : <EditText className="bare" label={`Target for ${row.name}`} placeholder="Set target" value={row.target} onSave={setTarget} />}</div>
+          <div className="sc-val"><span className="sc-lbl">Result</span>{canCheck ? <EditText className="bare" label={`Result for ${row.name}, week of ${fmt(week)}`} placeholder="Enter result" value={val} onSave={setVal} /> : <span className={'sc-fixed' + (val ? '' : ' sc-empty')}>{val || 'Not entered'}</span>}</div>
+        </>}
         <div className="rag" role="group" aria-label={`Status for ${row.name}, week of ${fmt(week)}`}>
           {RAG.map(([k, l]) => <button key={k} type="button" data-c={k} disabled={!canCheck} aria-label={l} aria-pressed={cur === k} title={l} onClick={() => set(k)}>{k}</button>)}
         </div>
@@ -954,8 +956,8 @@ function ScoreRow({ row }) {
         <div className="wide sc-hist">
           <h3>Weekly history</h3>
           {past.length ? <table>
-            <thead><tr><th>Week of</th><th>Target</th><th>{isAccount ? 'Note' : 'Result'}</th><th>Status</th><th>Last updated</th></tr></thead>
-            <tbody>{past.map(h => <tr key={h.week}><td>{fmt(h.week)}</td><td>{h.target || '–'}</td><td>{h.val || '–'}</td><td><i data-v={h.rag} />{ragName(h.rag)}</td><td>{h.upd ? `${h.upd.by || 'Unnamed'}, ${stamp(h.upd.at)}` : '–'}</td></tr>)}</tbody>
+            <thead><tr><th>Week of</th>{!isAccount && <th>Target</th>}{!isAccount && <th>Result</th>}<th>Status</th><th>Last updated</th></tr></thead>
+            <tbody>{past.map(h => <tr key={h.week}><td>{fmt(h.week)}</td>{!isAccount && <td>{h.target || '–'}</td>}{!isAccount && <td>{h.val || '–'}</td>}<td><i data-v={h.rag} />{ragName(h.rag)}</td><td>{h.upd ? `${h.upd.by || 'Unnamed'}, ${stamp(h.upd.at)}` : '–'}</td></tr>)}</tbody>
           </table> : <p className="small quiet">Saved weeks appear here after the first Friday lock.</p>}
         </div>
         {!locked && <div className="wide"><Confirm label="Delete" ask="Delete this row for everyone?" onYes={() => api.del('kpis', row.id)} /></div>}
@@ -1052,7 +1054,7 @@ function Kpis() {
           <section className="group sc-group" key={g}>
             <div className="ghead"><h2>{g}</h2><span className="small quiet num">{rs.length}</span></div>
             <div className="sc-table">
-              <div className="sc-row sc-head"><span>{g === ACCOUNTS ? 'Account' : 'KPI'}</span><span>Target</span><span>{g === ACCOUNTS ? 'Note' : 'Result'}</span><span>Status</span><span>Last 6 weeks</span><span /></div>
+              <div className="sc-row sc-head"><span>{g === ACCOUNTS ? 'Account' : 'KPI'}</span><span>{g === ACCOUNTS ? '' : 'Target'}</span><span>{g === ACCOUNTS ? '' : 'Result'}</span><span>Status</span><span>Last 6 weeks</span><span /></div>
               {rs.map(r => <ScoreRow key={r.id} row={r} />)}
             </div>
           </section>

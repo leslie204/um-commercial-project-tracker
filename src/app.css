@@ -271,6 +271,7 @@ i[data-v="R"]{background:var(--red)!important}i[data-v="Y"]{background:#ffc21a!i
 @container (max-width:640px){
   .sc-head,.trail{display:none}
   .sc-row{grid-template-columns:minmax(0,1fr) auto;grid-template-areas:"n n" "t t" "v v" "r d"}
+  .sc-acct{grid-template-areas:"n n" "r d"}.sc-gap{display:none}
   .sc-name{grid-area:n}.sc-target{grid-area:t;display:flex;align-items:center;gap:8px}.sc-target input{flex:1}.sc-val{grid-area:v;display:flex;align-items:center;gap:8px}.sc-val input{flex:1}.sc-lbl{display:inline}.rag{grid-area:r}.sc-row .tog{grid-area:d}
 }
 /* Team */
